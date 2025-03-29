@@ -17,6 +17,11 @@ String telegramPassword = "Digitaal Kantoor"; // Default password
 
 WiFiManager wm;
 CTBot myBot;
+int resetCode = -1;
+
+CTBotInlineKeyboard inlineKeyboard;
+CTBotInlineKeyboard settingsKeyboard;
+
 uint32_t users[MAX_USERS]; // Array of users
 
 String readFile(const char *path);
@@ -39,6 +44,16 @@ void setupStorage()
     String result = readFile("numberOfChannels");
     Serial.println("Number of channels: " + result);
     numberOfChannels = result.toInt();
+
+    if (numberOfChannels < 1)
+    {
+      numberOfChannels = 1;
+    }
+
+    if (numberOfChannels >= 16)
+    {
+      numberOfChannels = 16;
+    }
   }
 
   if (LittleFS.exists("telegramToken"))
@@ -63,7 +78,7 @@ void setupWifi()
 {
   // reset settings - wipe stored credentials for testing
   // these are stored by the esp library
-  wm.resetSettings();
+  // wm.resetSettings();
 
   String numberOfChannelsString = String(numberOfChannels);
   WiFiManagerParameter numberOfChannelsField("numberOfChannels", "Number of receivers", numberOfChannelsString.c_str(), 10, "type=\"number\" min=\"1\" max=\"16\"");
@@ -105,6 +120,27 @@ void setupTelegram()
     delay(5000);
     ESP.restart();
   }
+
+  for (long i = 0; i < numberOfChannels; i++)
+  {
+    String label = String(i + 1) + " on";
+    String id = "ON_" + String(i);
+    inlineKeyboard.addButton(label, id, CTBotKeyboardButtonQuery);
+
+    label = String(i + 1) + " off";
+    id = "OFF_" + String(i);
+    inlineKeyboard.addButton(label, id, CTBotKeyboardButtonQuery);
+
+    inlineKeyboard.addRow();
+  }
+
+  inlineKeyboard.addButton("Settings", "settings", CTBotKeyboardButtonQuery);
+
+  settingsKeyboard.addButton("Show the password for this bot", "password", CTBotKeyboardButtonQuery);
+  settingsKeyboard.addRow();
+  settingsKeyboard.addButton("Sign out", "logoff", CTBotKeyboardButtonQuery);
+  settingsKeyboard.addRow();
+  settingsKeyboard.addButton("Reset the receiver to factory settings", "reset", CTBotKeyboardButtonQuery);
 }
 
 void setup()
@@ -144,65 +180,74 @@ void loopTelegram()
   {
     if (isAuthorized(msg.sender.id))
     {
-      // if (msg.text.equalsIgnoreCase("/aan"))
-      // {
-      //   state = HIGH;
-      //   digitalWrite(relayPin, state);
-      //   myBot.sendMessage(msg.sender.id, "Koffiemachine staat aan.");
-      // }
-      // else if (msg.text.equalsIgnoreCase("/uit"))
-      // {
-      //   state = LOW;
-      //   digitalWrite(relayPin, state);
-      //   myBot.sendMessage(msg.sender.id, "Koffiemachine staat uit.");
-      // }
-      // else if (msg.text.equalsIgnoreCase("/wachtwoord"))
-      // {
-      //   String reply = "Het wachtwoord is: " + password;
-      //   myBot.sendMessage(msg.sender.id, reply);
-      // }
-      // else if (msg.text.equalsIgnoreCase("/reset"))
-      // {
-      //   // Generate random number before allowing to continue
-      //   randomSeed(ESP.getCycleCount());
-      //   resetCode = random(100000, 999999);
-      //   String reply = "Weet u het zeker? type '/reset ";
-      //   reply += String(resetCode, DEC);
-      //   reply += "' om het apparaat te resetten";
-      //   myBot.sendMessage(msg.sender.id, reply);
-      // }
-      // else if (msg.text.equalsIgnoreCase("/reset " + String(resetCode, DEC)))
-      // {
-      //   if (resetCode != -1)
-      //   {
-      //     String reply = "Apparaat wordt gereset.";
-      //     myBot.sendMessage(msg.sender.id, reply);
-      //     delay(1000);
-      //     deauthorizeAll();
-      //     wifiManager.resetSettings();
-      //     delay(1000);
-      //     ESP.restart();
-      //   }
-      // }
-      // else if (msg.text.equalsIgnoreCase("/afmelden"))
-      // {
-      //   deauthorize(msg.sender.id);
-      //   String reply = "U bent afgemeld";
-      //   myBot.sendMessage(msg.sender.id, reply);
-      // }
-      // else
-      // {
-      //   if (state)
-      //   {
-      //     String reply = "Beste " + msg.sender.firstName + ", Je koffiemachine staat aan. Type /uit om je machine uit te zetten.";
-      //     myBot.sendMessage(msg.sender.id, reply);
-      //   }
-      //   else
-      //   {
-      //     String reply = "Beste " + msg.sender.firstName + ", Je koffiemachine staat uit. Type /aan om je machine aan te zetten.";
-      //     myBot.sendMessage(msg.sender.id, reply);
-      //   }
-      // }
+      Serial.println(msg.messageType);
+      if (msg.messageType == CTBotMessageText)
+      {
+        if (msg.text.equalsIgnoreCase("/reset " + String(resetCode, DEC)))
+        {
+          if (resetCode != -1)
+          {
+            String reply = "Device will be  gereset.";
+            myBot.sendMessage(msg.sender.id, reply);
+            delay(1000);
+            wm.resetSettings();
+            LittleFS.format();
+            delay(1000);
+            ESP.restart();
+          }
+        }
+        else
+        {
+          myBot.sendMessage(msg.sender.id, "What do you want to do?", inlineKeyboard);
+        }
+      }
+      else if (msg.messageType == CTBotMessageQuery)
+      {
+        if (msg.callbackQueryData.equals("settings"))
+        {
+          myBot.sendMessage(msg.sender.id, "Here are the possible settings:", settingsKeyboard);
+        }
+        else if (msg.callbackQueryData.equals("password"))
+        {
+          String reply = "The password is: " + telegramPassword;
+          myBot.sendMessage(msg.sender.id, reply);
+        }
+        else if (msg.callbackQueryData.equals("logoff"))
+        {
+          deauthorize(msg.sender.id);
+          String reply = "You are logged off.";
+          myBot.sendMessage(msg.sender.id, reply);
+        }
+        else if (msg.callbackQueryData.equals("reset"))
+        {
+          // Generate random number before allowing to continue
+          randomSeed(ESP.getCycleCount());
+          resetCode = random(100000, 999999);
+          String reply = "Are you sure? type '/reset " + String(resetCode, DEC) + "' to reset this device to factory settings.";
+          myBot.sendMessage(msg.sender.id, reply);
+        }
+        else
+        {
+          String id;
+          for (long i = 0; i < numberOfChannels; i++)
+          {
+            // String label = String(i + 1) + " on";
+            id = "ON_" + String(i);
+            if (msg.callbackQueryData.equals(id)) {
+              Serial.println("TODO RF433 for " + id);
+              myBot.sendMessage(msg.sender.id, "Device is turned on.");
+              return;
+            }
+
+            id = "OFF_" + String(i);
+            if (msg.callbackQueryData.equals(id)) {
+              Serial.println("TODO RF433 for " + id);
+              myBot.sendMessage(msg.sender.id, "Device is turned off.");
+              return;
+            }
+          }
+        }
+      }
     }
     else
     {
@@ -210,19 +255,16 @@ void loopTelegram()
       {
         authorize(msg.sender.id);
 
-        String reply = "Beste " + msg.sender.firstName + ", U bent aangemeld. Type /start om uw apparaten te bedienen.";
+        String reply = "Dear " + msg.sender.firstName + ", you are logged on. Type /start to control your devices.";
         myBot.sendMessage(msg.sender.id, reply);
       }
       else
       {
-        String reply = "Beste " + msg.sender.firstName + ", Voer een geldig wachtwoord in om verder te gaan.";
+        String reply = "Dear " + msg.sender.firstName + ", please give the secret code before you continue.";
         myBot.sendMessage(msg.sender.id, reply);
       }
     }
   }
-
-  // wait 250 milliseconds
-  delay(250);
 }
 
 void loop()
