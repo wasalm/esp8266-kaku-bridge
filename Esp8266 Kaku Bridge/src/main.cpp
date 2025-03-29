@@ -187,7 +187,7 @@ void loopTelegram()
         {
           if (resetCode != -1)
           {
-            String reply = "Device will be  gereset.";
+            String reply = "Device will be reset.";
             myBot.sendMessage(msg.sender.id, reply);
             delay(1000);
             wm.resetSettings();
