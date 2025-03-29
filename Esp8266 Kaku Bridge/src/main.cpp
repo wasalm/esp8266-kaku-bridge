@@ -159,8 +159,6 @@ void setupTransmitter()
 void setup()
 {
   Serial.begin(115200);
-  delay(5000);
-  Serial.println("\n\nSTARING\n\n"); // temp
 
   setupTransmitter();
   setupStorage();
@@ -357,16 +355,12 @@ void deauthorize(uint32_t userId)
 
 void handleMessage(FB_msg &msg)
 {
-  Serial.println(msg.toString());
-
   if (isAuthorized(msg.userID.toInt()))
   {
     if (msg.query)
     {
-      Serial.println(msg.data);
       if (msg.data.equals("settings"))
       {
-        Serial.println("HI");
         bot.inlineMenuCallback("Here are the possible settings:", settingsKeyboardLabels, settingsKeyboardIds, msg.chatID);
       }
       else if (msg.data.equals("password"))
