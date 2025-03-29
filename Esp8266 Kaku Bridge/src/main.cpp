@@ -4,6 +4,7 @@
 #include <LittleFS.h>
 #include <FastBot.h>
 #include "ntp.h"
+#include "NewRemoteTransmitter.h"
 
 // Constants
 #define RF_PIN D5
@@ -15,6 +16,7 @@ long numberOfChannels = 1;
 String telegramToken;
 String telegramPassword = "Digitaal Kantoor"; // Default password
 
+NewRemoteTransmitter transmitter(0, RF_PIN, 260, 4);
 WiFiManager wm;
 FastBot bot;
 int resetCode = -1;
@@ -145,12 +147,22 @@ void setupTelegram()
   }
 }
 
+void setupTransmitter()
+{
+  uint8_t mac[6];
+  wifi_get_macaddr(STATION_IF, mac);
+
+  // Make each transmitter unique
+  transmitter._address = (uint32_t)(mac[3] << 16 | mac[4] << 8 | mac[5]);
+}
+
 void setup()
 {
   Serial.begin(115200);
   delay(5000);
   Serial.println("\n\nSTARING\n\n"); // temp
 
+  setupTransmitter();
   setupStorage();
   setupWifi();
   setupNTP();
@@ -385,7 +397,7 @@ void handleMessage(FB_msg &msg)
           id = "ON_" + String(i);
           if (msg.data.equals(id))
           {
-            Serial.println("TODO RF433 for " + id);
+            transmitter.sendUnit(i,true);
             bot.sendMessage("Device is turned on.", msg.chatID);
             return;
           }
@@ -393,7 +405,7 @@ void handleMessage(FB_msg &msg)
           id = "OFF_" + String(i);
           if (msg.data.equals(id))
           {
-            Serial.println("TODO RF433 for " + id);
+            transmitter.sendUnit(i,false);
             bot.sendMessage("Device is turned off.", msg.chatID);
             return;
           }
