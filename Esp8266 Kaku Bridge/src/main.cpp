@@ -2,7 +2,7 @@
 #include <WiFiManager.h>
 #include <FS.h>
 #include <LittleFS.h>
-#include <CTBot.h>
+#include <FastBot.h>
 #include "ntp.h"
 
 // Constants
@@ -16,11 +16,13 @@ String telegramToken;
 String telegramPassword = "Digitaal Kantoor"; // Default password
 
 WiFiManager wm;
-CTBot myBot;
+FastBot bot;
 int resetCode = -1;
 
-CTBotInlineKeyboard inlineKeyboard;
-CTBotInlineKeyboard settingsKeyboard;
+String inlineKeyboardLabels = "";
+String inlineKeyboardIds = "";
+String settingsKeyboardLabels = "Show password \n Sign out \n Reset receiver";
+String settingsKeyboardIds = "password, logoff, reset";
 
 uint32_t users[MAX_USERS]; // Array of users
 
@@ -108,39 +110,39 @@ void setupWifi()
   Serial.println("Connected to WiFi");
 }
 
+void handleMessage(FB_msg &msg);
 void setupTelegram()
 {
-  // set the telegram bot token
-  myBot.setTelegramToken(telegramToken);
+  bot.setToken(telegramToken);
+  bot.attach(handleMessage);
 
-  // check if all things are ok
-  if (!myBot.testConnection())
-  {
-    Serial.println("Unable to connect to telegram");
-    delay(5000);
-    ESP.restart();
-  }
-
+  // Setup menu
+  inlineKeyboardLabels = "";
+  inlineKeyboardIds = "";
   for (long i = 0; i < numberOfChannels; i++)
   {
-    String label = String(i + 1) + " on";
-    String id = "ON_" + String(i);
-    inlineKeyboard.addButton(label, id, CTBotKeyboardButtonQuery);
+    inlineKeyboardLabels += String(i + 1) + " on";
+    inlineKeyboardLabels += " \t ";
+    inlineKeyboardLabels += String(i + 1) + " off";
+    inlineKeyboardLabels += " \n ";
 
-    label = String(i + 1) + " off";
-    id = "OFF_" + String(i);
-    inlineKeyboard.addButton(label, id, CTBotKeyboardButtonQuery);
-
-    inlineKeyboard.addRow();
+    inlineKeyboardIds += "ON_" + String(i);
+    inlineKeyboardIds += ", ";
+    inlineKeyboardIds += "OFF_" + String(i);
+    inlineKeyboardIds += ", ";
   }
+  inlineKeyboardLabels += "Settings";
+  inlineKeyboardIds += "settings";
 
-  inlineKeyboard.addButton("Settings", "settings", CTBotKeyboardButtonQuery);
-
-  settingsKeyboard.addButton("Show the password for this bot", "password", CTBotKeyboardButtonQuery);
-  settingsKeyboard.addRow();
-  settingsKeyboard.addButton("Sign out", "logoff", CTBotKeyboardButtonQuery);
-  settingsKeyboard.addRow();
-  settingsKeyboard.addButton("Reset the receiver to factory settings", "reset", CTBotKeyboardButtonQuery);
+  // check connection
+  uint8_t res = bot.tick();
+  if (res > 1)
+  {
+    Serial.println("Unable to connect to telegram");
+    wm.resetSettings();
+    delay(1000);
+    ESP.restart();
+  }
 }
 
 void setup()
@@ -174,96 +176,12 @@ void authorize(uint32_t userId);
 void deauthorize(uint32_t userId);
 void loopTelegram()
 {
-  TBMessage msg;
-
-  if (myBot.getNewMessage(msg))
+  uint8_t res = bot.tick();
+  if (res > 1)
   {
-    if (isAuthorized(msg.sender.id))
-    {
-      Serial.println(msg.messageType);
-      if (msg.messageType == CTBotMessageText)
-      {
-        if (msg.text.equalsIgnoreCase("/reset " + String(resetCode, DEC)))
-        {
-          if (resetCode != -1)
-          {
-            String reply = "Device will be reset.";
-            myBot.sendMessage(msg.sender.id, reply);
-            delay(1000);
-            wm.resetSettings();
-            LittleFS.format();
-            delay(1000);
-            ESP.restart();
-          }
-        }
-        else
-        {
-          myBot.sendMessage(msg.sender.id, "What do you want to do?", inlineKeyboard);
-        }
-      }
-      else if (msg.messageType == CTBotMessageQuery)
-      {
-        if (msg.callbackQueryData.equals("settings"))
-        {
-          myBot.sendMessage(msg.sender.id, "Here are the possible settings:", settingsKeyboard);
-        }
-        else if (msg.callbackQueryData.equals("password"))
-        {
-          String reply = "The password is: " + telegramPassword;
-          myBot.sendMessage(msg.sender.id, reply);
-        }
-        else if (msg.callbackQueryData.equals("logoff"))
-        {
-          deauthorize(msg.sender.id);
-          String reply = "You are logged off.";
-          myBot.sendMessage(msg.sender.id, reply);
-        }
-        else if (msg.callbackQueryData.equals("reset"))
-        {
-          // Generate random number before allowing to continue
-          randomSeed(ESP.getCycleCount());
-          resetCode = random(100000, 999999);
-          String reply = "Are you sure? type '/reset " + String(resetCode, DEC) + "' to reset this device to factory settings.";
-          myBot.sendMessage(msg.sender.id, reply);
-        }
-        else
-        {
-          String id;
-          for (long i = 0; i < numberOfChannels; i++)
-          {
-            // String label = String(i + 1) + " on";
-            id = "ON_" + String(i);
-            if (msg.callbackQueryData.equals(id)) {
-              Serial.println("TODO RF433 for " + id);
-              myBot.sendMessage(msg.sender.id, "Device is turned on.");
-              return;
-            }
+    Serial.print("TICK: ");
 
-            id = "OFF_" + String(i);
-            if (msg.callbackQueryData.equals(id)) {
-              Serial.println("TODO RF433 for " + id);
-              myBot.sendMessage(msg.sender.id, "Device is turned off.");
-              return;
-            }
-          }
-        }
-      }
-    }
-    else
-    {
-      if (msg.text.equals(telegramPassword))
-      {
-        authorize(msg.sender.id);
-
-        String reply = "Dear " + msg.sender.firstName + ", you are logged on. Type /start to control your devices.";
-        myBot.sendMessage(msg.sender.id, reply);
-      }
-      else
-      {
-        String reply = "Dear " + msg.sender.firstName + ", please give the secret code before you continue.";
-        myBot.sendMessage(msg.sender.id, reply);
-      }
-    }
+    Serial.println(res);
   }
 }
 
@@ -423,4 +341,99 @@ void deauthorize(uint32_t userId)
     }
   }
   saveUsers();
+}
+
+void handleMessage(FB_msg &msg)
+{
+  Serial.println(msg.toString());
+
+  if (isAuthorized(msg.userID.toInt()))
+  {
+    if (msg.query)
+    {
+      Serial.println(msg.data);
+      if (msg.data.equals("settings"))
+      {
+        Serial.println("HI");
+        bot.inlineMenuCallback("Here are the possible settings:", settingsKeyboardLabels, settingsKeyboardIds, msg.chatID);
+      }
+      else if (msg.data.equals("password"))
+      {
+        String reply = "The password is: " + telegramPassword;
+        bot.sendMessage(reply, msg.chatID);
+      }
+      else if (msg.data.equals("logoff"))
+      {
+        deauthorize(msg.userID.toInt());
+        String reply = "You are logged off.";
+        bot.closeMenuText(reply, msg.chatID);
+      }
+      else if (msg.data.equals("reset"))
+      {
+        // Generate random number before allowing to continue
+        randomSeed(ESP.getCycleCount());
+        resetCode = random(100000, 999999);
+        String reply = "Are you sure? type 'Reset " + String(resetCode, DEC) + "' to reset this device to factory settings.";
+        bot.sendMessage(reply, msg.chatID);
+      }
+      else
+      {
+        String id;
+        for (long i = 0; i < numberOfChannels; i++)
+        {
+          // String label = String(i + 1) + " on";
+          id = "ON_" + String(i);
+          if (msg.data.equals(id))
+          {
+            Serial.println("TODO RF433 for " + id);
+            bot.sendMessage("Device is turned on.", msg.chatID);
+            return;
+          }
+
+          id = "OFF_" + String(i);
+          if (msg.data.equals(id))
+          {
+            Serial.println("TODO RF433 for " + id);
+            bot.sendMessage("Device is turned off.", msg.chatID);
+            return;
+          }
+        }
+      }
+    }
+    else
+    {
+      if (msg.text.equalsIgnoreCase("Reset " + String(resetCode, DEC)))
+      {
+        if (resetCode != -1)
+        {
+          String reply = "Device will be reset.";
+          bot.sendMessage(reply, msg.chatID);
+          delay(1000);
+          wm.resetSettings();
+          LittleFS.format();
+          delay(1000);
+          ESP.restart();
+        }
+      }
+      else
+      {
+        bot.inlineMenuCallback("What do you want to do?", inlineKeyboardLabels, inlineKeyboardIds, msg.chatID);
+      }
+    }
+  }
+  else
+  {
+    if (msg.text.equals(telegramPassword))
+    {
+      authorize(msg.userID.toInt());
+
+      String reply = "Dear " + msg.first_name + ", you are logged on. Type /start to control your devices.";
+      bot.showMenuText(reply, "Start", msg.chatID);
+    }
+    else
+    {
+      String reply = "Dear " + msg.first_name + ", please give the secret code before you continue.";
+      bot.closeMenuText(reply, msg.chatID);
+    }
+  }
 }
