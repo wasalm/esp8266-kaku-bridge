@@ -98,7 +98,7 @@ void setupWifi()
   wm.setClass("invert"); // dark mode
 
   bool res;
-  res = wm.autoConnect("KAKU Bridge"); // anonymous ap
+  res = wm.autoConnect("KaKu Bridge"); // anonymous ap
 
   if (!res)
   {
