@@ -379,8 +379,8 @@ void handleMessage(FB_msg &msg)
         // Generate random number before allowing to continue
         randomSeed(ESP.getCycleCount());
         resetCode = random(100000, 999999);
-        String reply = "Are you sure? type 'Reset " + String(resetCode, DEC) + "' to reset this device to factory settings.";
-        bot.sendMessage(reply, msg.chatID);
+        String reply = "Are you sure? Type 'Reset " + String(resetCode, DEC) + "' to reset this device to factory settings.";
+        bot.closeMenuText(reply, msg.chatID);
       }
       else
       {
