@@ -111,7 +111,8 @@ void setupWifi()
   if (!res)
   {
     Serial.println("Failed to connect");
-    delay(10000);
+    LittleFS.remove("hasSetup");
+    delay(1000);
     ESP.restart();
   }
 
@@ -202,9 +203,9 @@ void loopRestartTimer()
     struct tm timeinfo;
 
     gmtime_r(&now, &timeinfo);
-    if (timeinfo.tm_hour == 2)
+    if (timeinfo.tm_hour == 3)
     {
-      // Is it 2 o clock GMT at night? (3 or 4 amsterdam time)
+      // Is it 3 o clock GMT at night? (4 or 5 amsterdam time)
       // If yes to both, please reset.
       ESP.restart();
     }
