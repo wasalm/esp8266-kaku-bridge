@@ -1,22 +1,27 @@
 #include <Arduino.h>
-#include <WiFiClientSecure.h>
 #include <WiFiManager.h>
+#include <time.h>
 #include <FS.h>
 #include <LittleFS.h>
-#include "ntp.h"
 #include "NewRemoteTransmitter.h"
+
+#include <CertStoreBearSSL.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClientSecure.h>
 
 // Constants
 #define RF_PIN D5
 #define URL "https://vps.andries-salm.com/spiegel/dk/device.php";
 
 // General variables
+bool hasSetup = false;
 String username = "";
 String password = "";
 String klantcode = "";
 
 NewRemoteTransmitter transmitter(0, RF_PIN, 260, 4);
 WiFiManager wm;
+BearSSL::CertStore certStore;
 
 String readFile(const char *path);
 void writeFile(const char *path, String data);
@@ -29,6 +34,8 @@ void setupStorage()
     Serial.println("LittleFS Mount Failed");
     return;
   }
+
+  hasSetup = LittleFS.exists("hasSetup");
 
   if (LittleFS.exists("username"))
   {
@@ -47,17 +54,46 @@ void setupStorage()
     klantcode = readFile("klantcode");
     Serial.println("Klantcode: " + klantcode);
   }
+
+  int numCerts = certStore.initCertStore(LittleFS, PSTR("/certs.idx"), PSTR("/certs.ar"));
+  Serial.printf("Number of CA certs read: %d\n", numCerts);
+  if (numCerts == 0)
+  {
+    Serial.printf("No certs found. Did you run certs-from-mozilla.py and upload the LittleFS directory before running?\n");
+  }
+}
+
+void setupNTP()
+{
+  configTime(3 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+
+  Serial.print("Waiting for NTP time sync: ");
+  time_t now = time(nullptr);
+  while (now < 8 * 3600 * 2)
+  {
+    delay(500);
+    Serial.print(".");
+    now = time(nullptr);
+  }
+  Serial.println("");
+  struct tm timeinfo;
+  gmtime_r(&now, &timeinfo);
+  Serial.print("Current time: ");
+  Serial.print(asctime(&timeinfo));
 }
 
 void setupWifi()
 {
   // reset settings - wipe stored credentials for testing
   // these are stored by the esp library
-  wm.resetSettings();
+  if (!hasSetup)
+  {
+    wm.resetSettings();
+  }
 
   WiFiManagerParameter usernameField("username", "DK Gebruikersnaam", username.c_str(), 256);
   WiFiManagerParameter passwordField("password", "DK Wachtwoord", password.c_str(), 256, "type=\"password\"");
-  WiFiManagerParameter klantcodeField("klantcode", "DK Klantcode", klantcode.c_str(), 256, "placeholder=\"1234\"");
+  WiFiManagerParameter klantcodeField("klantcode", "DK Klantcode", klantcode.c_str(), 256);
 
   wm.addParameter(&usernameField);
   wm.addParameter(&passwordField);
@@ -82,40 +118,58 @@ void setupWifi()
   Serial.println("Connected to WiFi");
 }
 
-// void handleMessage(FB_msg &msg);
-// void setupTelegram()
-// {
-//   bot.setToken(telegramToken);
-//   bot.attach(handleMessage);
+String urlencode(String str);
+String getUniqueID();
+void setupMQTT()
+{
+  String wsHost = "";
+  String wsPort = "";
+  String wsPath = "";
+  String wsProtocol = "";
+  String mqttUser = "";
+  String mqttPass = "";
+  String mqttClientId = "";
+  String mqttBaseTopic = "";
 
-//   // Setup menu
-//   inlineKeyboardLabels = "";
-//   inlineKeyboardIds = "";
-//   for (long i = 0; i < numberOfChannels; i++)
-//   {
-//     inlineKeyboardLabels += String(i + 1) + " on";
-//     inlineKeyboardLabels += " \t ";
-//     inlineKeyboardLabels += String(i + 1) + " off";
-//     inlineKeyboardLabels += " \n ";
+  // First we will retreive the login data from DK
+  BearSSL::WiFiClientSecure bear;
+  HTTPClient httpClient;
+  bear.setCertStore(&certStore);
 
-//     inlineKeyboardIds += "ON_" + String(i);
-//     inlineKeyboardIds += ", ";
-//     inlineKeyboardIds += "OFF_" + String(i);
-//     inlineKeyboardIds += ", ";
-//   }
-//   inlineKeyboardLabels += "Settings";
-//   inlineKeyboardIds += "settings";
+  String url = URL;
+  url += "?user=" + urlencode(username);
+  url += "&pass=" + urlencode(password);
+  url += "&code=" + urlencode(klantcode);
+  url += "&device=" + getUniqueID();
+  url += "&type=rf433v1";
 
-//   // check connection
-//   uint8_t res = bot.tick();
-//   if (res > 1)
-//   {
-//     Serial.println("Unable to connect to telegram");
-//     wm.resetSettings();
-//     delay(1000);
-//     ESP.restart();
-//   }
-// }
+  if (!httpClient.begin(bear, url)) // Initiate connection
+  {
+    Serial.printf("[HTTP} Unable to connect\n");
+    LittleFS.remove("hasSetup");
+    delay(1000);
+    ESP.restart();
+  }
+
+  int httpCode = httpClient.GET(); // Make request
+
+  if (httpCode <= 0 || httpCode >= 400)
+  {
+    Serial.print("[HTTP] GET... failed, error: ");
+    Serial.println(httpCode);
+
+    httpClient.end();
+
+    LittleFS.remove("hasSetup");
+    delay(1000);
+    ESP.restart();
+  }
+
+  String payload = httpClient.getString(); // Get response
+  Serial.println(payload);                 // Display response via serial
+  
+  // TODO
+}
 
 void setupTransmitter()
 {
@@ -128,13 +182,15 @@ void setupTransmitter()
 
 void setup()
 {
+  delay(5000);
   Serial.begin(115200);
+  Serial.println("Hello world");
 
   setupTransmitter();
   setupStorage();
   setupWifi();
   setupNTP();
-  //   setupTelegram();
+  setupMQTT();
 }
 
 void loopRestartTimer()
@@ -142,7 +198,11 @@ void loopRestartTimer()
   if (millis() >= 1000 * 60 * 60 * 6)
   {
     // Device Running more than 6 hours
-    if (hour() == 2)
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+
+    gmtime_r(&now, &timeinfo);
+    if (timeinfo.tm_hour == 2)
     {
       // Is it 2 o clock GMT at night? (3 or 4 amsterdam time)
       // If yes to both, please reset.
@@ -150,20 +210,6 @@ void loopRestartTimer()
     }
   }
 }
-
-// bool isAuthorized(uint32_t userId);
-// void authorize(uint32_t userId);
-// void deauthorize(uint32_t userId);
-// void loopTelegram()
-// {
-//   uint8_t res = bot.tick();
-//   if (res > 1)
-//   {
-//     Serial.print("TICK: ");
-
-//     Serial.println(res);
-//   }
-// }
 
 void loop()
 {
@@ -188,20 +234,19 @@ String getParam(String name)
 
 void saveParamCallback()
 {
-    Serial.println("[CALLBACK] saveParamCallback fired");
-    Serial.println("PARAM username = " + getParam("username"));
-    Serial.println("PARAM password = " + getParam("password"));
-    Serial.println("PARAM klantcode = " + getParam("klantcode"));
+  Serial.println("[CALLBACK] saveParamCallback fired");
+  Serial.println("PARAM username = " + getParam("username"));
+  Serial.println("PARAM password = " + getParam("password"));
+  Serial.println("PARAM klantcode = " + getParam("klantcode"));
 
-    username = getParam("username");
-    password = getParam("password");
-    klantcode = getParam("klantcode");
+  username = getParam("username");
+  password = getParam("password");
+  klantcode = getParam("klantcode");
 
-    LittleFS.format();
-
-    writeFile("username", username);
-    writeFile("password", password);
-    writeFile("klantcode", klantcode);
+  writeFile("hasSetup", "hasSetup");
+  writeFile("username", username);
+  writeFile("password", password);
+  writeFile("klantcode", klantcode);
 }
 
 /*
@@ -252,134 +297,56 @@ void writeFile(const char *path, String data)
   file.close();
 }
 
-// /*
-//  * Function related to telegram
-//  */
+/*
+ * Functions needed for MQTT
+ */
+String urlencode(String str)
+{
+  String encodedString = "";
+  char c;
+  char code0;
+  char code1;
+  // char code2;
+  for (unsigned int i = 0; i < str.length(); i++)
+  {
+    c = str.charAt(i);
+    if (c == ' ')
+    {
+      encodedString += '+';
+    }
+    else if (isalnum(c))
+    {
+      encodedString += c;
+    }
+    else
+    {
+      code1 = (c & 0xf) + '0';
+      if ((c & 0xf) > 9)
+      {
+        code1 = (c & 0xf) - 10 + 'A';
+      }
+      c = (c >> 4) & 0xf;
+      code0 = c + '0';
+      if (c > 9)
+      {
+        code0 = c - 10 + 'A';
+      }
+      // code2 = '\0';
+      encodedString += '%';
+      encodedString += code0;
+      encodedString += code1;
+      // encodedString+=code2;
+    }
+    yield();
+  }
+  return encodedString;
+}
 
-// bool isAuthorized(uint32_t userId)
-// {
-//   for (int i = 0; i < MAX_USERS; i++)
-//   {
-//     if (users[i] == userId)
-//     {
-//       return true;
-//     }
-//   }
-//   return false;
-// }
-
-// void authorize(uint32_t userId)
-// {
-//   for (int i = 0; i < MAX_USERS; i++)
-//   {
-//     if (users[i] == 0)
-//     {
-//       users[i] = userId;
-//       saveUsers();
-//       return;
-//     }
-//   }
-// }
-
-// void deauthorize(uint32_t userId)
-// {
-//   for (int i = 0; i < MAX_USERS; i++)
-//   {
-//     if (users[i] == userId)
-//     {
-//       users[i] = 0;
-//     }
-//   }
-//   saveUsers();
-// }
-
-// void handleMessage(FB_msg &msg)
-// {
-//   if (isAuthorized(msg.userID.toInt()))
-//   {
-//     if (msg.query)
-//     {
-//       if (msg.data.equals("settings"))
-//       {
-//         bot.inlineMenuCallback("Here are the possible settings:", settingsKeyboardLabels, settingsKeyboardIds, msg.chatID);
-//       }
-//       else if (msg.data.equals("password"))
-//       {
-//         String reply = "The password is: " + telegramPassword;
-//         bot.sendMessage(reply, msg.chatID);
-//       }
-//       else if (msg.data.equals("logoff"))
-//       {
-//         deauthorize(msg.userID.toInt());
-//         String reply = "You are logged off.";
-//         bot.closeMenuText(reply, msg.chatID);
-//       }
-//       else if (msg.data.equals("reset"))
-//       {
-//         // Generate random number before allowing to continue
-//         randomSeed(ESP.getCycleCount());
-//         resetCode = random(100000, 999999);
-//         String reply = "Are you sure? Type 'Reset " + String(resetCode, DEC) + "' to reset this device to factory settings.";
-//         bot.closeMenuText(reply, msg.chatID);
-//       }
-//       else
-//       {
-//         String id;
-//         for (long i = 0; i < numberOfChannels; i++)
-//         {
-//           // String label = String(i + 1) + " on";
-//           id = "ON_" + String(i);
-//           if (msg.data.equals(id))
-//           {
-//             transmitter.sendUnit(i,true);
-//             bot.sendMessage("Device is turned on.", msg.chatID);
-//             return;
-//           }
-
-//           id = "OFF_" + String(i);
-//           if (msg.data.equals(id))
-//           {
-//             transmitter.sendUnit(i,false);
-//             bot.sendMessage("Device is turned off.", msg.chatID);
-//             return;
-//           }
-//         }
-//       }
-//     }
-//     else
-//     {
-//       if (msg.text.equalsIgnoreCase("Reset " + String(resetCode, DEC)))
-//       {
-//         if (resetCode != -1)
-//         {
-//           String reply = "Device will be reset.";
-//           bot.sendMessage(reply, msg.chatID);
-//           delay(1000);
-//           wm.resetSettings();
-//           LittleFS.format();
-//           delay(1000);
-//           ESP.restart();
-//         }
-//       }
-//       else
-//       {
-//         bot.inlineMenuCallback("What do you want to do?", inlineKeyboardLabels, inlineKeyboardIds, msg.chatID);
-//       }
-//     }
-//   }
-//   else
-//   {
-//     if (msg.text.equals(telegramPassword))
-//     {
-//       authorize(msg.userID.toInt());
-
-//       String reply = "Dear " + msg.first_name + ", you are logged on. Type /start to control your devices.";
-//       bot.showMenuText(reply, "Start", msg.chatID);
-//     }
-//     else
-//     {
-//       String reply = "Dear " + msg.first_name + ", please give the secret code before you continue.";
-//       bot.closeMenuText(reply, msg.chatID);
-//     }
-//   }
-// }
+String getUniqueID()
+{
+  String result = WiFi.macAddress();
+  result.remove(0, 9);
+  result.toLowerCase();
+  result.replace(":", "");
+  return result;
+}
