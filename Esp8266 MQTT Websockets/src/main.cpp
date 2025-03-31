@@ -9,6 +9,7 @@
 #include <ESP8266HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
+#include "StringStream.h"
 
 // Constants
 #define RF_PIN D5
@@ -170,11 +171,23 @@ void setupMQTTConfig()
   }
 
   String payload = httpClient.getString(); // Get response
-  Serial.println(payload);                 // Display response via serial
+  StringStream stream(&payload);
   httpClient.end();
 
-  //TODO
-  Serial.println("TODO: SET DATA");
+  mqttHost = stream.readStringUntil('\n');
+  mqttPort = stream.readStringUntil('\n');
+  mqttUser = stream.readStringUntil('\n');
+  mqttPass = stream.readStringUntil('\n');
+  mqttClientId = stream.readStringUntil('\n');
+  mqttBaseTopic = stream.readStringUntil('\n');
+
+  Serial.println("Host: " + mqttHost);
+  Serial.println("Port: " + mqttPort);
+  Serial.println("Username: " + mqttUser);
+  Serial.println("Password: " + mqttPass);
+  Serial.println("ClientId: " + mqttClientId);
+  Serial.println("Topic: " + mqttBaseTopic);
+  
 }
 
 void handleMessage(char* topic, uint8_t * payload, size_t length);
@@ -387,7 +400,7 @@ void handleMessage(char* topic, uint8_t * payload, size_t length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.print("] ");
-  for (int i = 0; i < length; i++) {
+  for (size_t i = 0; i < length; i++) {
     Serial.print((char)payload[i]);
   }
   Serial.println();
