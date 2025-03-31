@@ -224,9 +224,7 @@ void setupTransmitter()
 
 void setup()
 {
-  delay(5000);
   Serial.begin(115200);
-  Serial.println("Hello world");
 
   setupTransmitter();
   setupStorage();
