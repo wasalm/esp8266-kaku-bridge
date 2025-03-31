@@ -8,9 +8,11 @@
 #include <CertStoreBearSSL.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <PubSubClient.h>
 
 // Constants
 #define RF_PIN D5
+#define NUM_OF_UNITS 16
 #define URL "https://vps.andries-salm.com/spiegel/dk/device.php";
 
 // General variables
@@ -22,6 +24,15 @@ String klantcode = "";
 NewRemoteTransmitter transmitter(0, RF_PIN, 260, 4);
 WiFiManager wm;
 BearSSL::CertStore certStore;
+BearSSL::WiFiClientSecure mqttWiFiClient;
+PubSubClient mqttClient;
+
+String mqttHost = "";
+String mqttPort = "";
+String mqttUser = "";
+String mqttPass = "";
+String mqttClientId = "";
+String mqttBaseTopic = "";
 
 String readFile(const char *path);
 void writeFile(const char *path, String data);
@@ -121,21 +132,13 @@ void setupWifi()
 
 String urlencode(String str);
 String getUniqueID();
-void setupMQTT()
-{
-  String wsHost = "";
-  String wsPort = "";
-  String wsPath = "";
-  String wsProtocol = "";
-  String mqttUser = "";
-  String mqttPass = "";
-  String mqttClientId = "";
-  String mqttBaseTopic = "";
 
+void setupMQTTConfig()
+{
   // First we will retreive the login data from DK
-  BearSSL::WiFiClientSecure bear;
+  BearSSL::WiFiClientSecure wifiClient;
   HTTPClient httpClient;
-  bear.setCertStore(&certStore);
+  wifiClient.setCertStore(&certStore);
 
   String url = URL;
   url += "?user=" + urlencode(username);
@@ -144,7 +147,7 @@ void setupMQTT()
   url += "&device=" + getUniqueID();
   url += "&type=rf433v1";
 
-  if (!httpClient.begin(bear, url)) // Initiate connection
+  if (!httpClient.begin(wifiClient, url)) // Initiate connection
   {
     Serial.printf("[HTTP} Unable to connect\n");
     LittleFS.remove("hasSetup");
@@ -168,8 +171,30 @@ void setupMQTT()
 
   String payload = httpClient.getString(); // Get response
   Serial.println(payload);                 // Display response via serial
-  
-  // TODO
+  httpClient.end();
+
+  //TODO
+  Serial.println("TODO: SET DATA");
+}
+
+void handleMessage(char* topic, uint8_t * payload, size_t length);
+void setupMQTT()
+{
+  mqttWiFiClient.setCertStore(&certStore);
+  mqttClient.setClient(mqttWiFiClient);
+  mqttClient.setServer(mqttHost.c_str(), mqttPort.toInt());
+  mqttClient.setCallback(handleMessage);
+
+  if (mqttClient.connect(mqttClientId.c_str(), mqttUser.c_str(), mqttPass.c_str()))
+  {
+    Serial.println("Connected to MQTT");
+
+    for (int i = 0; i < NUM_OF_UNITS; i++)
+    {
+      String topic = mqttBaseTopic + "/channel" + i + "/set";
+      mqttClient.subscribe(topic.c_str());
+    }
+  }
 }
 
 void setupTransmitter()
@@ -191,6 +216,7 @@ void setup()
   setupStorage();
   setupWifi();
   setupNTP();
+  setupMQTTConfig();
   setupMQTT();
 }
 
@@ -212,9 +238,14 @@ void loopRestartTimer()
   }
 }
 
+void loopMQTT()
+{
+  mqttClient.loop();
+}
+
 void loop()
 {
-  //   loopTelegram();
+  loopMQTT();
   loopRestartTimer();
 }
 
@@ -350,4 +381,17 @@ String getUniqueID()
   result.toLowerCase();
   result.replace(":", "");
   return result;
+}
+
+void handleMessage(char* topic, uint8_t * payload, size_t length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+  //TODO
+
 }
