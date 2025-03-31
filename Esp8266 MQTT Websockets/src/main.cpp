@@ -207,6 +207,9 @@ void setupMQTT()
       String topic = mqttBaseTopic + "/channel" + i + "/set";
       mqttClient.subscribe(topic.c_str());
     }
+
+    String topic = mqttBaseTopic + "/reset";
+    mqttClient.subscribe(topic.c_str());
   }
 }
 
@@ -397,14 +400,48 @@ String getUniqueID()
 }
 
 void handleMessage(char* topic, uint8_t * payload, size_t length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (size_t i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
+  String _topic = String(topic);
+  
+  Serial.print("Message arrived, ");
+
+  if(_topic == mqttBaseTopic + "/reset") {
+    Serial.println("Reset requested.");
+    LittleFS.remove("hasSetup");
+    delay(1000);
+    ESP.restart();
   }
-  Serial.println();
 
-  //TODO
+  int channel = -1;
+  char c1 = _topic.charAt(mqttBaseTopic.length()+8);
+  char c2 = _topic.charAt(mqttBaseTopic.length()+9);
+  char c3 = _topic.charAt(mqttBaseTopic.length()+10);
 
+  if(c2 == '/' && c1 >= '0' && c1 <= '9') {
+    // Single digit
+    channel = c1 - '0';
+  } else if(c3 == '/' && c1 == '1' && c2 >= '0' && c2 <= '5') {
+    // Single digit
+    channel = 10 + (c2 - '0');
+  }
+
+  Serial.print("Channel: ");
+  Serial.print(channel, DEC);
+
+  if(channel < 0 || channel >= 16) {
+    return;
+  }
+
+  String answerTopic = mqttBaseTopic + "/channel" + String(channel);
+  
+  if(length >= 2 && payload[0] == 'O' && payload[1] == 'N') {
+    Serial.println(", Turn on");
+    mqttClient.publish(answerTopic.c_str(), "ON");
+    transmitter.sendUnit(channel,true);
+  }
+
+  if(length >= 3 && payload[0] == 'O' && payload[1] == 'F' && payload[2] == 'F') {
+    Serial.println(", Turn off");
+    mqttClient.publish(answerTopic.c_str(), "OFF");
+    transmitter.sendUnit(channel,false);
+  }
 }
