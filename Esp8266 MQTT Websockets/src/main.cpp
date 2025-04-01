@@ -14,7 +14,7 @@
 // Constants
 #define RF_PIN D5
 #define NUM_OF_UNITS 16
-#define URL "https://vps.andries-salm.com/spiegel/dk/device.php";
+#define URL "https://bobsoft.nl/koppelingen/kaku/device.php";
 
 // General variables
 bool hasSetup = false;
@@ -254,7 +254,29 @@ void loopRestartTimer()
 
 void loopMQTT()
 {
+  if (!mqttClient.connected())
+  {
+    Serial.println("MQTT disconnected");
+  }
+
   mqttClient.loop();
+
+  // Sendping
+  static unsigned long mLastTime = 0;
+  if ((millis() - mLastTime) >= 10000)
+  {
+    mLastTime = millis();
+    String path = mqttBaseTopic + "/ping";
+    mqttClient.publish(path.c_str(), getUniqueID().c_str());
+  }
+
+  if (!mqttClient.connected())
+  {
+    if (millis() > 30000)
+    {
+      ESP.restart();
+    }
+  }
 }
 
 void loop()
@@ -433,13 +455,13 @@ void handleMessage(char* topic, uint8_t * payload, size_t length) {
   
   if(length >= 2 && payload[0] == 'O' && payload[1] == 'N') {
     Serial.println(", Turn on");
-    mqttClient.publish(answerTopic.c_str(), "ON");
+    mqttClient.publish(answerTopic.c_str(), "ON",true);
     transmitter.sendUnit(channel,true);
   }
 
   if(length >= 3 && payload[0] == 'O' && payload[1] == 'F' && payload[2] == 'F') {
     Serial.println(", Turn off");
-    mqttClient.publish(answerTopic.c_str(), "OFF");
+    mqttClient.publish(answerTopic.c_str(), "OFF", true);
     transmitter.sendUnit(channel,false);
   }
 }
